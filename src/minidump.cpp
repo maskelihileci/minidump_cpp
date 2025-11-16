@@ -121,6 +121,10 @@ bool minidump_file::parse_streams(std::ifstream& file) {
       if (!parse_handle_data_stream(file, dir))
         return false;
       break;
+    case stream_type::EmuHandleStream:
+      if (!parse_emu_handle_stream(file, dir))
+        return false;
+      break;
     default:
       // Skip unknown streams
       break;
@@ -304,6 +308,48 @@ bool minidump_file::parse_handle_data_stream(std::ifstream& file, const director
     }
 
     handles_.push_back(handle);
+  }
+
+  return true;
+}
+
+bool minidump_file::parse_emu_handle_stream(std::ifstream& file, const directory& dir) {
+  file.seekg(dir.rva);
+
+  emu_handle_info_header header;
+  file.read(reinterpret_cast<char*>(&header), sizeof(header));
+  if (file.fail())
+    return false;
+
+  emu_handle_entries_.resize(header.number_of_entries);
+
+  for (uint32_t i = 0; i < header.number_of_entries; ++i) {
+    emu_handle_entry entry;
+    file.read(reinterpret_cast<char*>(&entry), sizeof(entry));
+    if (file.fail())
+      break;
+
+    // Read type-specific detail data if available
+    if (entry.detail_rva != 0 && entry.detail_size > 0) {
+      auto current_pos = file.tellg();
+      file.seekg(entry.detail_rva);
+
+      std::vector<uint8_t> detail_data(entry.detail_size);
+      file.read(reinterpret_cast<char*>(detail_data.data()), entry.detail_size);
+      if (file.fail())
+        break;
+
+      // Store detail data in emu_handle_detail_data_ (append)
+      emu_handle_detail_data_.insert(emu_handle_detail_data_.end(),
+                                     detail_data.begin(), detail_data.end());
+
+      // Update the RVA to point to the location in emu_handle_detail_data_
+      entry.detail_rva = emu_handle_detail_data_.size() - entry.detail_size;
+
+      file.seekg(current_pos);
+    }
+
+    emu_handle_entries_[i] = entry;
   }
 
   return true;

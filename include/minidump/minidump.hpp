@@ -57,7 +57,8 @@ enum class stream_type : uint32_t {
   process_vm_counters_stream = 22,
   ipt_trace_stream = 23,
   thread_names_stream = 24,
-  last_reserved_stream = 0x0000FFFF
+  last_reserved_stream = 0x0000FFFF,
+  EmuHandleStream = 0xE0000100
 };
 
 enum class product_type : uint8_t {
@@ -242,6 +243,70 @@ struct handle_descriptor {
   std::string object_name;
 };
 
+// EmuHandle Stream structures (for extended handle state information)
+enum class emu_handle_type : uint32_t {
+  unknown = 0,
+  event = 1,
+  mutex = 2,
+  semaphore = 3,
+  timer = 4,
+  io_completion = 5
+};
+
+struct emu_handle_info_header {
+  uint32_t size_of_header;    // sizeof(emu_handle_info_header)
+  uint16_t version;            // 1
+  uint16_t flags;              // global flags (currently 0)
+  uint32_t number_of_entries;  // Number of emu_handle_entry structures
+  uint32_t reserved0;          // future use
+  uint32_t reserved1;          // future use
+};
+
+struct emu_handle_entry {
+  uint64_t handle_value;     // Original handle value from target process
+  emu_handle_type emu_type;  // Handle type
+  uint32_t flags;            // Common flags (HAS_STATE_INFO, STATE_QUERY_FAILED, etc.)
+  uint32_t detail_rva;       // RVA to type-specific info block (0 = none)
+  uint32_t detail_size;      // Size of type-specific info block
+  uint32_t reserved0;        // future use
+  uint32_t reserved1;        // future use
+};
+
+// Common flags for emu_handle_entry.flags
+constexpr uint32_t EMU_HANDLE_FLAG_HAS_STATE_INFO = 0x00000001;
+constexpr uint32_t EMU_HANDLE_FLAG_STATE_QUERY_FAILED = 0x00000002;
+constexpr uint32_t EMU_HANDLE_FLAG_TYPE_MISMATCH = 0x00000004;
+
+struct emu_event_info_v1 {
+  uint32_t size;           // sizeof(emu_event_info_v1)
+  uint16_t version;        // 1
+  uint16_t flags;          // future use
+  uint8_t manual_reset;    // 0 = Auto, 1 = Manual, 0xFF = unknown
+  uint8_t signaled;        // 0 = Non-signaled, 1 = Signaled, 0xFF = unknown
+  uint16_t reserved0;      // alignment
+  uint32_t reserved1;      // future use
+  uint32_t reserved2;      // future use
+  uint32_t reserved3;      // future use
+};
+
+struct emu_mutex_info_v1 {
+  uint32_t size;
+  uint16_t version;        // 1
+  uint16_t flags;
+  uint32_t owner_thread_id; // if known, 0 otherwise
+  uint32_t lock_count;      // if known, 0 otherwise
+  uint32_t reserved0;
+};
+
+struct emu_semaphore_info_v1 {
+  uint32_t size;
+  uint16_t version;        // 1
+  uint16_t flags;
+  uint32_t current_count;  // if known
+  uint32_t maximum_count;  // if known
+  uint32_t reserved0;
+};
+
 // Forward declarations
 class minidump_reader;
 
@@ -267,6 +332,12 @@ public:
   }
   [[nodiscard]] const misc_info* get_misc_info() const noexcept { return misc_info_.get(); }
   [[nodiscard]] const std::vector<handle_descriptor>& handles() const noexcept { return handles_; }
+  [[nodiscard]] const std::vector<emu_handle_entry>& emu_handle_entries() const noexcept {
+    return emu_handle_entries_;
+  }
+  [[nodiscard]] const std::vector<uint8_t>& emu_handle_detail_data() const noexcept {
+    return emu_handle_detail_data_;
+  }
 
   // Output methods (Python-compatible)
   void print_all() const;
@@ -301,6 +372,7 @@ private:
   bool parse_exception_stream(std::ifstream& file, const directory& dir);
   bool parse_misc_info_stream(std::ifstream& file, const directory& dir);
   bool parse_handle_data_stream(std::ifstream& file, const directory& dir);
+  bool parse_emu_handle_stream(std::ifstream& file, const directory& dir);
 
   std::string filename_;
   minidump_header header_{};
@@ -313,6 +385,8 @@ private:
   std::unique_ptr<exception_info> exception_info_;
   std::unique_ptr<misc_info> misc_info_;
   std::vector<handle_descriptor> handles_;
+  std::vector<emu_handle_entry> emu_handle_entries_;
+  std::vector<uint8_t> emu_handle_detail_data_; // Raw detail data for emu handles
 };
 
 // minidump_reader for memory access operations
